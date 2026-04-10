@@ -1,0 +1,16 @@
+[general]
+tick_rate_ms = 100
+max_agents = 20
+output_ring_size = 10000
+
+[agent.defaults]
+command = "claude"
+shell = "/bin/zsh"
+auto_restart = false
+graceful_shutdown_timeout_secs = 5
+
+[theme]
+style = "dark"
+
+[keybinds]
+leader = ":"
