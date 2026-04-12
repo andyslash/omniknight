@@ -3,4 +3,5 @@ pub enum InputMode {
     Normal,
     Insert,
     Command,
+    Dialog,
 }

@@ -14,6 +14,9 @@ pub struct Workspace {
     pub env_vars: HashMap<String, String>,
     pub status: WorkspaceStatus,
     pub created_at: DateTime<Utc>,
+    /// Branch name for the git worktree
+    #[serde(default)]
+    pub branch: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

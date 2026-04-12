@@ -5,8 +5,8 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 
 use crate::app::action::Action;
-use crate::app::state::View;
 use crate::ui::theme::Theme;
+use crate::ui::widgets::input_dialog::DialogIntent;
 
 #[derive(Debug, Clone)]
 pub struct PaletteItem {
@@ -27,34 +27,24 @@ impl CommandPaletteState {
     pub fn new() -> Self {
         let items = vec![
             PaletteItem {
-                category: "view".into(),
-                label: "Home Dashboard".into(),
-                action: Action::SwitchView(View::Home),
+                category: "workspace".into(),
+                label: "New Workspace".into(),
+                action: Action::OpenDialog(DialogIntent::CreateWorkspace),
             },
             PaletteItem {
-                category: "view".into(),
-                label: "Mission Control".into(),
-                action: Action::SwitchView(View::MissionControl),
+                category: "session".into(),
+                label: "New Shell".into(),
+                action: Action::NewShellSession,
             },
             PaletteItem {
-                category: "view".into(),
-                label: "Terminal".into(),
-                action: Action::SwitchView(View::Terminal),
-            },
-            PaletteItem {
-                category: "view".into(),
-                label: "Workspace".into(),
-                action: Action::SwitchView(View::Workspace),
+                category: "session".into(),
+                label: "Spawn Agent".into(),
+                action: Action::OpenDialog(DialogIntent::LaunchAgent),
             },
             PaletteItem {
                 category: "command".into(),
                 label: "Quit".into(),
                 action: Action::Quit,
-            },
-            PaletteItem {
-                category: "terminal".into(),
-                label: "New Terminal Tab".into(),
-                action: Action::NewTerminalTab,
             },
         ];
         let filtered = (0..items.len()).collect();
@@ -100,7 +90,6 @@ pub fn render(frame: &mut Frame, area: Rect, state: &CommandPaletteState) {
         .constraints([Constraint::Length(3), Constraint::Min(0)])
         .split(area);
 
-    // Input field
     let input = Paragraph::new(Line::from(vec![
         Span::raw("> "),
         Span::styled(&state.input, Theme::palette_input()),
@@ -113,7 +102,6 @@ pub fn render(frame: &mut Frame, area: Rect, state: &CommandPaletteState) {
     );
     frame.render_widget(input, chunks[0]);
 
-    // Results list
     let items: Vec<ListItem> = state
         .filtered
         .iter()

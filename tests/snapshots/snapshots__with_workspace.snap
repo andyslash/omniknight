@@ -1,0 +1,25 @@
+---
+source: tests/snapshots.rs
+assertion_line: 42
+expression: output
+---
+ [NORMAL]  Omniknight  |  my-project  |  1 workspaces                                               
+┌ ▸ Workspaces ─────────┐┌ my-project ─────────────────────────────────────────────────────────────┐
+│ ● my-project          ││                                                                         │
+│                       ││  No sessions — press 't' for shell or 'a' for agent                     │
+│                       ││                                                                         │
+│                       ││                                                                         │
+│                       ││                                                                         │
+│                       ││                                                                         │
+│                       ││                                                                         │
+│                       ││                                                                         │
+│                       ││                                                                         │
+│                       ││                                                                         │
+│                       ││                                                                         │
+│                       ││                                                                         │
+│                       ││                                                                         │
+│                       ││                                                                         │
+│                       ││                                                                         │
+│                       ││                                                                         │
+└───────────────────────┘└─────────────────────────────────────────────────────────────────────────┘
+ j/k:select  Enter/l:terminal  n:new workspace  :::palette  q:quit

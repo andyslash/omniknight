@@ -3,16 +3,17 @@ use std::thread;
 use std::time::Duration;
 
 use crossbeam_channel::{select, Receiver};
-use crossterm::event::{self, Event};
+use crossterm::event::{self, Event, KeyCode};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 use crate::app::action::Action;
 use crate::app::event::AppEvent;
-use crate::app::state::{AppState, View};
+use crate::app::state::{AppState, Pane};
 use crate::keybinds::handler::handle_key;
 use crate::keybinds::mode::InputMode;
 use crate::ui::layout;
+use crate::ui::widgets::input_dialog::{DialogIntent, InputDialogState};
 
 pub fn run(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
@@ -21,7 +22,6 @@ pub fn run(
 ) -> anyhow::Result<()> {
     let tick_rate = Duration::from_millis(100);
 
-    // Spawn crossterm event polling thread
     let (input_tx, input_rx) = crossbeam_channel::unbounded();
     thread::spawn(move || loop {
         if event::poll(tick_rate).unwrap_or(false) {
@@ -40,7 +40,6 @@ pub fn run(
         }
     });
 
-    // Main loop
     loop {
         terminal.draw(|frame| {
             layout::render(frame, app);
@@ -66,25 +65,12 @@ pub fn run(
             AppEvent::Key(key) => handle_key(*key, app),
             AppEvent::Tick => Action::Noop,
             AppEvent::Resize(_, _) => Action::Noop,
-            AppEvent::AgentOutput { agent_id, line } => {
-                if let Some(agent) = app.agents.get_mut(*agent_id) {
-                    agent.output.push(line.clone());
-                    agent.metrics.lines_output += 1;
-                }
-                Action::Noop
-            }
-            AppEvent::AgentStateChange { agent_id, state } => {
-                if let Some(agent) = app.agents.get_mut(*agent_id) {
-                    agent.state = *state;
-                }
-                Action::Noop
-            }
+            AppEvent::WorkspaceOutput { .. } => Action::Noop,
         };
 
         apply_action(app, action);
 
         if app.should_quit {
-            app.agents.kill_all();
             break;
         }
     }
@@ -95,47 +81,122 @@ pub fn run(
 fn apply_action(app: &mut AppState, action: Action) {
     match action {
         Action::Quit => app.should_quit = true,
-        Action::SwitchView(view) => app.switch_view(view),
         Action::SetInputMode(mode) => app.input_mode = mode,
-        Action::NavigateUp => match app.active_view {
-            View::Home => {
-                app.selected_workspace = app.selected_workspace.saturating_sub(1);
-            }
-            View::MissionControl => {
-                app.selected_agent = app.selected_agent.saturating_sub(1);
-            }
-            View::Workspace => {
-                app.selected_mission = app.selected_mission.saturating_sub(1);
-            }
-            View::Terminal => {}
-        },
-        Action::NavigateDown => match app.active_view {
-            View::Home => {
-                let max = app.workspaces.list().len().saturating_sub(1);
-                app.selected_workspace = (app.selected_workspace + 1).min(max);
-            }
-            View::MissionControl => {
-                let max = app.agents.list().len().saturating_sub(1);
-                app.selected_agent = (app.selected_agent + 1).min(max);
-            }
-            View::Workspace => {
-                let max = app.missions.list().len().saturating_sub(1);
-                app.selected_mission = (app.selected_mission + 1).min(max);
-            }
-            View::Terminal => {}
-        },
-        Action::Select => {
-            if let View::Home = app.active_view {
-                let workspaces = app.workspaces.list();
-                if let Some(ws) = workspaces.get(app.selected_workspace) {
-                    app.active_workspace_id = Some(ws.id);
-                    app.switch_view(View::Workspace);
+
+        Action::FocusWorkspaces => {
+            app.focused_pane = Pane::Workspaces;
+        }
+        Action::FocusTerminal => {
+            if let Some(ws_id) = app.active_workspace_id {
+                // Auto-spawn terminal on first focus
+                if !app.workspaces.has_sessions(ws_id) {
+                    let _ = app.workspaces.spawn_shell(ws_id);
                 }
             }
+            app.focused_pane = Pane::Terminal;
+            app.terminal_scroll_offset = 0;
         }
+
+        Action::NavigateUp => navigate(app, -1),
+        Action::NavigateDown => navigate(app, 1),
+        Action::NavigateN { direction, count } => {
+            for _ in 0..count {
+                navigate(app, direction);
+            }
+        }
+        Action::GotoTop => match app.focused_pane {
+            Pane::Workspaces => app.selected_workspace = 0,
+            Pane::Terminal => app.terminal_scroll_offset = 999999,
+        },
+        Action::GotoBottom => match app.focused_pane {
+            Pane::Workspaces => {
+                app.selected_workspace = app.workspaces.list().len().saturating_sub(1);
+            }
+            Pane::Terminal => app.terminal_scroll_offset = 0,
+        },
+        Action::PageDown => {
+            for _ in 0..10 {
+                navigate(app, 1);
+            }
+        }
+        Action::PageUp => {
+            for _ in 0..10 {
+                navigate(app, -1);
+            }
+        }
+
+        Action::Select => match app.focused_pane {
+            Pane::Workspaces => {
+                let workspaces = app.workspaces.list();
+                if let Some(ws) = workspaces.get(app.selected_workspace) {
+                    let ws_id = ws.id;
+                    app.active_workspace_id = Some(ws_id);
+                    app.terminal_scroll_offset = 0;
+                    // Auto-spawn terminal
+                    if !app.workspaces.has_sessions(ws_id) {
+                        let _ = app.workspaces.spawn_shell(ws_id);
+                    }
+                    app.focused_pane = Pane::Terminal;
+                }
+            }
+            Pane::Terminal => {}
+        },
         Action::Back => {
-            app.switch_view(View::Home);
+            if app.focused_pane == Pane::Terminal {
+                app.focused_pane = Pane::Workspaces;
+            }
         }
+
+        // Terminal input — forward keypress to workspace PTY
+        Action::TerminalInput(key) => {
+            if let Some(ws_id) = app.active_workspace_id {
+                let bytes = key_to_bytes(key.code);
+                let _ = app.workspaces.write_to_active_session(ws_id, &bytes);
+            }
+        }
+
+        // Sessions
+        Action::NewShellSession => {
+            if let Some(ws_id) = app.active_workspace_id {
+                let _ = app.workspaces.spawn_shell(ws_id);
+                app.terminal_scroll_offset = 0;
+            }
+        }
+        Action::SpawnAgent {
+            command,
+            args,
+            title,
+        } => {
+            if let Some(ws_id) = app.active_workspace_id {
+                let _ = app.workspaces.spawn_agent(ws_id, title, &command, &args);
+                app.terminal_scroll_offset = 0;
+                app.focused_pane = Pane::Terminal;
+            }
+        }
+        Action::NextSession => {
+            if let Some(ws_id) = app.active_workspace_id {
+                app.workspaces.next_session(ws_id);
+                app.terminal_scroll_offset = 0;
+            }
+        }
+        Action::PrevSession => {
+            if let Some(ws_id) = app.active_workspace_id {
+                app.workspaces.prev_session(ws_id);
+                app.terminal_scroll_offset = 0;
+            }
+        }
+
+        // Workspace
+        Action::CreateWorkspace { name, root } => {
+            let id = app.workspaces.create(name, root);
+            app.active_workspace_id = Some(id);
+            // Spawn terminal immediately
+            let _ = app.workspaces.spawn_shell(id);
+            app.focused_pane = Pane::Terminal;
+            app.terminal_scroll_offset = 0;
+        }
+
+        // Command palette
         Action::OpenCommandPalette => {
             app.command_palette.is_open = true;
             app.input_mode = InputMode::Command;
@@ -163,28 +224,126 @@ fn apply_action(app: &mut AppState, action: Action) {
                 apply_action(app, action);
             }
         }
-        Action::KillAgent(id) => {
-            let _ = app.agents.kill_agent(id);
+        Action::CommandPaletteNavigateUp => {
+            if app.command_palette.selected > 0 {
+                app.command_palette.selected -= 1;
+            }
         }
-        Action::SwitchTerminalTab(idx) => {
-            app.terminals.switch_tab(idx);
-            app.selected_terminal_tab = idx;
+        Action::CommandPaletteNavigateDown => {
+            let max = app.command_palette.filtered.len().saturating_sub(1);
+            if app.command_palette.selected < max {
+                app.command_palette.selected += 1;
+            }
         }
-        Action::NewTerminalTab => {
-            let idx = app.terminals.create_tab("shell".to_string());
-            app.selected_terminal_tab = idx;
+
+        // Dialog
+        Action::OpenDialog(intent) => {
+            let dialog = match intent {
+                DialogIntent::CreateWorkspace => InputDialogState::workspace_dialog(),
+                DialogIntent::LaunchAgent => InputDialogState::agent_dialog(),
+                _ => return,
+            };
+            app.dialog = Some(dialog);
+            app.input_mode = InputMode::Dialog;
         }
-        Action::SwitchWorkspace(id) => {
-            app.active_workspace_id = Some(id);
+        Action::DialogInput(ch) => {
+            if let Some(dialog) = &mut app.dialog {
+                dialog.input_char(ch);
+            }
         }
-        Action::LaunchAgent { .. }
-        | Action::PauseAgent(_)
-        | Action::ResumeAgent(_)
-        | Action::FocusAgent(_)
-        | Action::CreateWorkspace { .. }
-        | Action::CloseTerminalTab(_)
-        | Action::TerminalInput(_)
-        | Action::CreateMission { .. }
-        | Action::Noop => {}
+        Action::DialogBackspace => {
+            if let Some(dialog) = &mut app.dialog {
+                dialog.backspace();
+            }
+        }
+        Action::DialogNextField => {
+            if let Some(dialog) = &mut app.dialog {
+                dialog.next_field();
+            }
+        }
+        Action::DialogPrevField => {
+            if let Some(dialog) = &mut app.dialog {
+                dialog.prev_field();
+            }
+        }
+        Action::DialogCancel => {
+            app.dialog = None;
+            app.input_mode = InputMode::Normal;
+        }
+        Action::DialogConfirm => {
+            if let Some(dialog) = app.dialog.take() {
+                app.input_mode = InputMode::Normal;
+                match dialog.intent {
+                    DialogIntent::CreateWorkspace => {
+                        let name = dialog.fields[0].value.trim().to_string();
+                        if name.is_empty() {
+                            return;
+                        }
+                        let root = std::path::PathBuf::from(dialog.fields[1].value.trim());
+                        apply_action(app, Action::CreateWorkspace { name, root });
+                    }
+                    DialogIntent::LaunchAgent => {
+                        let raw = dialog.fields[0].value.trim().to_string();
+                        if raw.is_empty() {
+                            return;
+                        }
+                        let mut parts = raw.split_whitespace();
+                        let command = parts.next().unwrap().to_string();
+                        let args: Vec<String> = parts.map(String::from).collect();
+                        let title = dialog.fields[1].value.trim().to_string();
+                        let title = if title.is_empty() { raw.clone() } else { title };
+                        apply_action(
+                            app,
+                            Action::SpawnAgent {
+                                command,
+                                args,
+                                title,
+                            },
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Action::Noop => {}
+    }
+}
+
+fn navigate(app: &mut AppState, direction: i32) {
+    match app.focused_pane {
+        Pane::Workspaces => {
+            let max = app.workspaces.list().len().saturating_sub(1);
+            if direction > 0 {
+                app.selected_workspace = (app.selected_workspace + 1).min(max);
+            } else {
+                app.selected_workspace = app.selected_workspace.saturating_sub(1);
+            }
+        }
+        Pane::Terminal => {
+            if direction > 0 {
+                app.terminal_scroll_offset = app.terminal_scroll_offset.saturating_sub(1);
+            } else {
+                app.terminal_scroll_offset += 1;
+            }
+        }
+    }
+}
+
+fn key_to_bytes(code: KeyCode) -> Vec<u8> {
+    match code {
+        KeyCode::Char(c) => {
+            let mut buf = [0u8; 4];
+            let s = c.encode_utf8(&mut buf);
+            s.as_bytes().to_vec()
+        }
+        KeyCode::Enter => vec![13],
+        KeyCode::Backspace => vec![127],
+        KeyCode::Tab => vec![9],
+        KeyCode::Up => vec![27, 91, 65],
+        KeyCode::Down => vec![27, 91, 66],
+        KeyCode::Right => vec![27, 91, 67],
+        KeyCode::Left => vec![27, 91, 68],
+        _ => vec![],
     }
 }
