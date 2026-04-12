@@ -66,7 +66,6 @@ fn handle_normal_mode(key: KeyEvent, state: &mut AppState) -> Action {
         }
     }
 
-    // Vim motions
     match key.code {
         KeyCode::Char('G') => {
             state.vim.reset();
@@ -119,7 +118,6 @@ fn handle_normal_mode(key: KeyEvent, state: &mut AppState) -> Action {
                 Action::NavigateUp
             }
         }
-        // Session cycling (global — works from any pane)
         KeyCode::Char(']') => return Action::NextSession,
         KeyCode::Char('[') => return Action::PrevSession,
         _ => {}
@@ -127,13 +125,16 @@ fn handle_normal_mode(key: KeyEvent, state: &mut AppState) -> Action {
 
     // Pane-specific
     match state.focused_pane {
-        Pane::Workspaces => match key.code {
-            KeyCode::Char('l') | KeyCode::Enter | KeyCode::Tab => Action::FocusTerminal,
+        Pane::SessionList => match key.code {
+            KeyCode::Char('l') | KeyCode::Enter | KeyCode::Tab => Action::Select,
+            KeyCode::Char(' ') => Action::ToggleCollapse,
             KeyCode::Char('n') => Action::OpenDialog(DialogIntent::CreateWorkspace),
+            KeyCode::Char('t') => Action::NewShellSession,
+            KeyCode::Char('a') => Action::OpenDialog(DialogIntent::LaunchAgent),
             _ => Action::Noop,
         },
         Pane::Terminal => match key.code {
-            KeyCode::Char('h') | KeyCode::Esc | KeyCode::BackTab => Action::FocusWorkspaces,
+            KeyCode::Char('h') | KeyCode::Esc | KeyCode::BackTab => Action::FocusSessionList,
             KeyCode::Char('i') => Action::SetInputMode(InputMode::Insert),
             KeyCode::Char('t') => Action::NewShellSession,
             KeyCode::Char('a') => Action::OpenDialog(DialogIntent::LaunchAgent),

@@ -46,7 +46,7 @@ fn render_main(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 fn render_workspaces(frame: &mut Frame, area: Rect, state: &AppState) {
-    let is_focused = state.focused_pane == Pane::Workspaces;
+    let is_focused = state.focused_pane == Pane::SessionList;
     let (border_style, title_style) = pane_styles(is_focused);
     let title = pane_title("Workspaces", is_focused);
 
@@ -81,9 +81,9 @@ fn render_workspaces(frame: &mut Frame, area: Rect, state: &AppState) {
                 WorkspaceStatus::Active => "●",
                 WorkspaceStatus::Archived => "○",
             };
-            let is_active = Some(ws.id) == state.active_workspace_id;
+            let is_active = Some(ws.id) == state.active_workspace_id();
             let has_sessions = state.workspaces.has_sessions(ws.id);
-            let style = if i == state.selected_workspace {
+            let style = if i == state.selected_index {
                 Theme::selected()
             } else if is_active {
                 Style::default()
@@ -113,7 +113,7 @@ fn render_workspaces(frame: &mut Frame, area: Rect, state: &AppState) {
 fn render_terminal(frame: &mut Frame, area: Rect, state: &AppState) {
     let is_focused = state.focused_pane == Pane::Terminal;
     let (border_style, title_style) = pane_styles(is_focused);
-    let ws_id = state.active_workspace_id;
+    let ws_id = state.active_workspace_id();
 
     // No workspace selected
     if ws_id.is_none() {
@@ -373,7 +373,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
 fn render_hints_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     let hints = match (state.focused_pane, state.input_mode) {
         (_, InputMode::Insert) => "Esc:normal mode  (typing goes to terminal)",
-        (Pane::Workspaces, _) => {
+        (Pane::SessionList, _) => {
             "j/k:select  Enter/l:terminal  n:new workspace  :::palette  q:quit"
         }
         (Pane::Terminal, _) => {

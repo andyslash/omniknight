@@ -8,7 +8,7 @@ use crate::ui::widgets::input_dialog::DialogIntent;
 pub enum Action {
     Quit,
     SetInputMode(InputMode),
-    FocusWorkspaces,
+    FocusSessionList,
     FocusTerminal,
     NavigateUp,
     NavigateDown,
@@ -22,6 +22,7 @@ pub enum Action {
     },
     Select,
     Back,
+    ToggleCollapse,
     // Workspace
     CreateWorkspace {
         name: String,
@@ -36,7 +37,7 @@ pub enum Action {
     },
     NextSession,
     PrevSession,
-    // Terminal input (raw keypress forwarded to PTY)
+    // Terminal input
     TerminalInput(KeyEvent),
     // Command palette
     OpenCommandPalette,

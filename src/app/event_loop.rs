@@ -14,6 +14,7 @@ use crate::keybinds::handler::handle_key;
 use crate::keybinds::mode::InputMode;
 use crate::ui::layout;
 use crate::ui::widgets::input_dialog::{DialogIntent, InputDialogState};
+use crate::workspace::manager::SessionTreeEntry;
 
 pub fn run(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
@@ -83,18 +84,14 @@ fn apply_action(app: &mut AppState, action: Action) {
         Action::Quit => app.should_quit = true,
         Action::SetInputMode(mode) => app.input_mode = mode,
 
-        Action::FocusWorkspaces => {
-            app.focused_pane = Pane::Workspaces;
+        Action::FocusSessionList => {
+            app.focused_pane = Pane::SessionList;
         }
         Action::FocusTerminal => {
-            if let Some(ws_id) = app.active_workspace_id {
-                // Auto-spawn terminal on first focus
-                if !app.workspaces.has_sessions(ws_id) {
-                    let _ = app.workspaces.spawn_shell(ws_id);
-                }
+            if app.active_session.is_some() {
+                app.focused_pane = Pane::Terminal;
+                app.terminal_scroll_offset = 0;
             }
-            app.focused_pane = Pane::Terminal;
-            app.terminal_scroll_offset = 0;
         }
 
         Action::NavigateUp => navigate(app, -1),
@@ -105,12 +102,13 @@ fn apply_action(app: &mut AppState, action: Action) {
             }
         }
         Action::GotoTop => match app.focused_pane {
-            Pane::Workspaces => app.selected_workspace = 0,
+            Pane::SessionList => app.selected_index = 0,
             Pane::Terminal => app.terminal_scroll_offset = 999999,
         },
         Action::GotoBottom => match app.focused_pane {
-            Pane::Workspaces => {
-                app.selected_workspace = app.workspaces.list().len().saturating_sub(1);
+            Pane::SessionList => {
+                let tree = app.workspaces.session_tree();
+                app.selected_index = tree.len().saturating_sub(1);
             }
             Pane::Terminal => app.terminal_scroll_offset = 0,
         },
@@ -125,41 +123,68 @@ fn apply_action(app: &mut AppState, action: Action) {
             }
         }
 
-        Action::Select => match app.focused_pane {
-            Pane::Workspaces => {
-                let workspaces = app.workspaces.list();
-                if let Some(ws) = workspaces.get(app.selected_workspace) {
-                    let ws_id = ws.id;
-                    app.active_workspace_id = Some(ws_id);
-                    app.terminal_scroll_offset = 0;
-                    // Auto-spawn terminal
-                    if !app.workspaces.has_sessions(ws_id) {
-                        let _ = app.workspaces.spawn_shell(ws_id);
+        Action::Select => {
+            let tree = app.workspaces.session_tree();
+            if let Some(entry) = tree.get(app.selected_index) {
+                match entry {
+                    SessionTreeEntry::WorkspaceHeader { workspace_id, .. } => {
+                        let ws_id = *workspace_id;
+                        // If workspace has no sessions, spawn shell and activate
+                        if !app.workspaces.has_sessions(ws_id) {
+                            if let Ok(idx) = app.workspaces.spawn_shell(ws_id) {
+                                app.active_session = Some((ws_id, idx));
+                                app.focused_pane = Pane::Terminal;
+                                app.terminal_scroll_offset = 0;
+                            }
+                        } else {
+                            // Toggle collapse
+                            app.workspaces.toggle_collapse(ws_id);
+                        }
                     }
-                    app.focused_pane = Pane::Terminal;
+                    SessionTreeEntry::SessionItem {
+                        workspace_id,
+                        session_idx,
+                        ..
+                    } => {
+                        app.active_session = Some((*workspace_id, *session_idx));
+                        app.focused_pane = Pane::Terminal;
+                        app.terminal_scroll_offset = 0;
+                    }
                 }
             }
-            Pane::Terminal => {}
-        },
+        }
+        Action::ToggleCollapse => {
+            let tree = app.workspaces.session_tree();
+            if let Some(entry) = tree.get(app.selected_index) {
+                let ws_id = match entry {
+                    SessionTreeEntry::WorkspaceHeader { workspace_id, .. } => *workspace_id,
+                    SessionTreeEntry::SessionItem { workspace_id, .. } => *workspace_id,
+                };
+                app.workspaces.toggle_collapse(ws_id);
+            }
+        }
         Action::Back => {
             if app.focused_pane == Pane::Terminal {
-                app.focused_pane = Pane::Workspaces;
+                app.focused_pane = Pane::SessionList;
             }
         }
 
-        // Terminal input — forward keypress to workspace PTY
+        // Terminal input
         Action::TerminalInput(key) => {
-            if let Some(ws_id) = app.active_workspace_id {
+            if let Some((ws_id, sess_idx)) = app.active_session {
                 let bytes = key_to_bytes(key.code);
-                let _ = app.workspaces.write_to_active_session(ws_id, &bytes);
+                let _ = app.workspaces.write_to_session(ws_id, sess_idx, &bytes);
             }
         }
 
         // Sessions
         Action::NewShellSession => {
-            if let Some(ws_id) = app.active_workspace_id {
-                let _ = app.workspaces.spawn_shell(ws_id);
-                app.terminal_scroll_offset = 0;
+            if let Some(ws_id) = resolve_workspace(app) {
+                if let Ok(idx) = app.workspaces.spawn_shell(ws_id) {
+                    app.active_session = Some((ws_id, idx));
+                    app.terminal_scroll_offset = 0;
+                    app.focused_pane = Pane::Terminal;
+                }
             }
         }
         Action::SpawnAgent {
@@ -167,21 +192,64 @@ fn apply_action(app: &mut AppState, action: Action) {
             args,
             title,
         } => {
-            if let Some(ws_id) = app.active_workspace_id {
-                let _ = app.workspaces.spawn_agent(ws_id, title, &command, &args);
-                app.terminal_scroll_offset = 0;
-                app.focused_pane = Pane::Terminal;
+            if let Some(ws_id) = resolve_workspace(app) {
+                if let Ok(idx) = app.workspaces.spawn_agent(ws_id, title, &command, &args) {
+                    app.active_session = Some((ws_id, idx));
+                    app.terminal_scroll_offset = 0;
+                    app.focused_pane = Pane::Terminal;
+                }
             }
         }
         Action::NextSession => {
-            if let Some(ws_id) = app.active_workspace_id {
+            if let Some((ws_id, _)) = app.active_session {
                 app.workspaces.next_session(ws_id);
+                // Sync active_session with manager
+                if let Some(mw) = app.workspaces.list().iter().position(|w| w.id == ws_id) {
+                    let tree = app.workspaces.session_tree();
+                    // Find the new active session idx from manager
+                    for (i, entry) in tree.iter().enumerate() {
+                        if let SessionTreeEntry::SessionItem {
+                            workspace_id,
+                            session_idx,
+                            ..
+                        } = entry
+                        {
+                            if *workspace_id == ws_id {
+                                // Check if this is now the active one
+                                let titles = app.workspaces.session_titles(ws_id);
+                                if titles.get(*session_idx).is_some_and(|(_, active)| *active) {
+                                    app.active_session = Some((ws_id, *session_idx));
+                                    app.selected_index = i;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
                 app.terminal_scroll_offset = 0;
             }
         }
         Action::PrevSession => {
-            if let Some(ws_id) = app.active_workspace_id {
+            if let Some((ws_id, _)) = app.active_session {
                 app.workspaces.prev_session(ws_id);
+                let tree = app.workspaces.session_tree();
+                for (i, entry) in tree.iter().enumerate() {
+                    if let SessionTreeEntry::SessionItem {
+                        workspace_id,
+                        session_idx,
+                        ..
+                    } = entry
+                    {
+                        if *workspace_id == ws_id {
+                            let titles = app.workspaces.session_titles(ws_id);
+                            if titles.get(*session_idx).is_some_and(|(_, active)| *active) {
+                                app.active_session = Some((ws_id, *session_idx));
+                                app.selected_index = i;
+                                break;
+                            }
+                        }
+                    }
+                }
                 app.terminal_scroll_offset = 0;
             }
         }
@@ -189,11 +257,11 @@ fn apply_action(app: &mut AppState, action: Action) {
         // Workspace
         Action::CreateWorkspace { name, root } => {
             let id = app.workspaces.create(name, root);
-            app.active_workspace_id = Some(id);
-            // Spawn terminal immediately
-            let _ = app.workspaces.spawn_shell(id);
-            app.focused_pane = Pane::Terminal;
-            app.terminal_scroll_offset = 0;
+            if let Ok(idx) = app.workspaces.spawn_shell(id) {
+                app.active_session = Some((id, idx));
+                app.focused_pane = Pane::Terminal;
+                app.terminal_scroll_offset = 0;
+            }
         }
 
         // Command palette
@@ -241,29 +309,28 @@ fn apply_action(app: &mut AppState, action: Action) {
             let dialog = match intent {
                 DialogIntent::CreateWorkspace => InputDialogState::workspace_dialog(),
                 DialogIntent::LaunchAgent => InputDialogState::agent_dialog(),
-                _ => return,
             };
             app.dialog = Some(dialog);
             app.input_mode = InputMode::Dialog;
         }
         Action::DialogInput(ch) => {
-            if let Some(dialog) = &mut app.dialog {
-                dialog.input_char(ch);
+            if let Some(d) = &mut app.dialog {
+                d.input_char(ch);
             }
         }
         Action::DialogBackspace => {
-            if let Some(dialog) = &mut app.dialog {
-                dialog.backspace();
+            if let Some(d) = &mut app.dialog {
+                d.backspace();
             }
         }
         Action::DialogNextField => {
-            if let Some(dialog) = &mut app.dialog {
-                dialog.next_field();
+            if let Some(d) = &mut app.dialog {
+                d.next_field();
             }
         }
         Action::DialogPrevField => {
-            if let Some(dialog) = &mut app.dialog {
-                dialog.prev_field();
+            if let Some(d) = &mut app.dialog {
+                d.prev_field();
             }
         }
         Action::DialogCancel => {
@@ -301,7 +368,6 @@ fn apply_action(app: &mut AppState, action: Action) {
                             },
                         );
                     }
-                    _ => {}
                 }
             }
         }
@@ -310,14 +376,27 @@ fn apply_action(app: &mut AppState, action: Action) {
     }
 }
 
+/// Resolve which workspace the current action should target.
+/// Uses the selected tree entry's workspace, or the active session's workspace.
+fn resolve_workspace(app: &mut AppState) -> Option<uuid::Uuid> {
+    // First try from selected tree entry
+    let ws_id = app.workspaces.workspace_for_tree_index(app.selected_index);
+    if ws_id.is_some() {
+        return ws_id;
+    }
+    // Fallback to active session
+    app.active_session.map(|(ws_id, _)| ws_id)
+}
+
 fn navigate(app: &mut AppState, direction: i32) {
     match app.focused_pane {
-        Pane::Workspaces => {
-            let max = app.workspaces.list().len().saturating_sub(1);
+        Pane::SessionList => {
+            let tree = app.workspaces.session_tree();
+            let max = tree.len().saturating_sub(1);
             if direction > 0 {
-                app.selected_workspace = (app.selected_workspace + 1).min(max);
+                app.selected_index = (app.selected_index + 1).min(max);
             } else {
-                app.selected_workspace = app.selected_workspace.saturating_sub(1);
+                app.selected_index = app.selected_index.saturating_sub(1);
             }
         }
         Pane::Terminal => {
