@@ -33,29 +33,12 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn status(&mut self) -> SessionStatus {
-        if let Some(ref mut child) = self.child {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    if status.success() {
-                        SessionStatus::Done
-                    } else {
-                        SessionStatus::Error
-                    }
-                }
-                Ok(None) => {
-                    // Still alive — check recent output
-                    let last = *self.last_output_at.lock().unwrap();
-                    if last.elapsed().as_secs() < 3 {
-                        SessionStatus::Running
-                    } else {
-                        SessionStatus::Idle
-                    }
-                }
-                Err(_) => SessionStatus::Error,
-            }
+    /// Quick status check based on output activity (no mutable borrow needed).
+    pub fn status(&self) -> SessionStatus {
+        let last = *self.last_output_at.lock().unwrap();
+        if last.elapsed().as_secs() < 3 {
+            SessionStatus::Running
         } else {
-            // No child handle (shouldn't happen, but fallback)
             SessionStatus::Idle
         }
     }
@@ -222,9 +205,9 @@ impl WorkspaceManager {
     }
 
     /// Build flattened session tree for rendering in the left pane.
-    pub fn session_tree(&mut self) -> Vec<SessionTreeEntry> {
+    pub fn session_tree(&self) -> Vec<SessionTreeEntry> {
         let mut entries = Vec::new();
-        for mw in &mut self.workspaces {
+        for mw in &self.workspaces {
             entries.push(SessionTreeEntry::WorkspaceHeader {
                 workspace_id: mw.workspace.id,
                 name: mw.workspace.name.clone(),
@@ -232,7 +215,7 @@ impl WorkspaceManager {
                 session_count: mw.sessions.len(),
             });
             if !mw.collapsed {
-                for (idx, session) in mw.sessions.iter_mut().enumerate() {
+                for (idx, session) in mw.sessions.iter().enumerate() {
                     entries.push(SessionTreeEntry::SessionItem {
                         workspace_id: mw.workspace.id,
                         session_idx: idx,
@@ -373,7 +356,7 @@ impl WorkspaceManager {
     }
 
     /// Resolve a tree index to the workspace it belongs to.
-    pub fn workspace_for_tree_index(&mut self, idx: usize) -> Option<Uuid> {
+    pub fn workspace_for_tree_index(&self, idx: usize) -> Option<Uuid> {
         let tree = self.session_tree();
         match tree.get(idx) {
             Some(SessionTreeEntry::WorkspaceHeader { workspace_id, .. }) => Some(*workspace_id),

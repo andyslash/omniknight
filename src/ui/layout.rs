@@ -9,7 +9,7 @@ use crate::app::state::{AppState, Pane};
 use crate::keybinds::mode::InputMode;
 use crate::ui::theme::Theme;
 use crate::ui::widgets::{fuzzy_input, input_dialog};
-use crate::workspace::model::WorkspaceStatus;
+use crate::workspace::manager::SessionTreeEntry;
 
 pub fn render(frame: &mut Frame, state: &AppState) {
     let chunks = Layout::default()
@@ -41,17 +41,17 @@ fn render_main(frame: &mut Frame, area: Rect, state: &AppState) {
         .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
         .split(area);
 
-    render_workspaces(frame, cols[0], state);
+    render_session_list(frame, cols[0], state);
     render_terminal(frame, cols[1], state);
 }
 
-fn render_workspaces(frame: &mut Frame, area: Rect, state: &AppState) {
+fn render_session_list(frame: &mut Frame, area: Rect, state: &AppState) {
     let is_focused = state.focused_pane == Pane::SessionList;
     let (border_style, title_style) = pane_styles(is_focused);
-    let title = pane_title("Workspaces", is_focused);
+    let title = pane_title("Sessions", is_focused);
 
-    let workspaces = state.workspaces.list();
-    if workspaces.is_empty() {
+    let tree = state.workspaces.session_tree();
+    if tree.is_empty() {
         let p = Paragraph::new(vec![
             Line::from(""),
             Line::from(Span::styled(
@@ -73,31 +73,70 @@ fn render_workspaces(frame: &mut Frame, area: Rect, state: &AppState) {
         return;
     }
 
-    let items: Vec<ListItem> = workspaces
+    let active_ws_id = state.active_workspace_id();
+    let active_session = state.active_session;
+
+    let items: Vec<ListItem> = tree
         .iter()
         .enumerate()
-        .map(|(i, ws)| {
-            let icon = match ws.status {
-                WorkspaceStatus::Active => "●",
-                WorkspaceStatus::Archived => "○",
-            };
-            let is_active = Some(ws.id) == state.active_workspace_id();
-            let has_sessions = state.workspaces.has_sessions(ws.id);
-            let style = if i == state.selected_index {
-                Theme::selected()
-            } else if is_active {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            let indicator = if has_sessions { " ◉" } else { "" };
-            ListItem::new(Line::from(vec![
-                Span::styled(format!(" {icon} "), Style::default().fg(Color::Green)),
-                Span::styled(&ws.name, style),
-                Span::styled(indicator, Style::default().fg(Color::Yellow)),
-            ]))
+        .map(|(i, entry)| {
+            let is_selected = i == state.selected_index;
+            match entry {
+                SessionTreeEntry::WorkspaceHeader {
+                    workspace_id,
+                    name,
+                    collapsed,
+                    session_count,
+                } => {
+                    let arrow = if *collapsed { "▶" } else { "▼" };
+                    let is_active_ws = Some(*workspace_id) == active_ws_id;
+                    let style = if is_selected {
+                        Theme::selected()
+                    } else if is_active_ws {
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD)
+                    };
+                    let count = format!(" [{session_count}]");
+                    ListItem::new(Line::from(vec![
+                        Span::styled(format!(" {arrow} "), Style::default().fg(Color::Yellow)),
+                        Span::styled(name.as_str(), style),
+                        Span::styled(count, Style::default().fg(Color::DarkGray)),
+                    ]))
+                }
+                SessionTreeEntry::SessionItem {
+                    workspace_id,
+                    session_idx,
+                    title,
+                    status,
+                    is_agent,
+                } => {
+                    let icon = Theme::session_status_icon(*status);
+                    let is_active = active_session == Some((*workspace_id, *session_idx));
+                    let style = if is_selected {
+                        Theme::selected()
+                    } else if is_active {
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Theme::session_status(*status)
+                    };
+                    let active_marker = if is_active { " ◉" } else { "" };
+                    let agent_tag = if *is_agent { " ⚡" } else { "" };
+                    ListItem::new(Line::from(vec![
+                        Span::raw("   "),
+                        Span::styled(format!("{icon} "), Theme::session_status(*status)),
+                        Span::styled(title.as_str(), style),
+                        Span::styled(agent_tag, Style::default().fg(Color::Yellow)),
+                        Span::styled(active_marker, Style::default().fg(Color::Cyan)),
+                    ]))
+                }
+            }
         })
         .collect();
 
@@ -203,7 +242,8 @@ fn render_terminal(frame: &mut Frame, area: Rect, state: &AppState) {
         .unwrap_or("—");
     let title = pane_title(&format!("{active_title}{mode_indicator}"), is_focused);
 
-    if let Some(raw_output) = state.workspaces.active_session_output(ws_id) {
+    let sess_idx = state.active_session.map(|(_, idx)| idx).unwrap_or(0);
+    if let Some(raw_output) = state.workspaces.session_output(ws_id, sess_idx) {
         let all_lines = parse_vt100_styled(&raw_output, rows, cols);
         let total = all_lines.len();
         let visible_height = rows as usize;
@@ -374,7 +414,7 @@ fn render_hints_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     let hints = match (state.focused_pane, state.input_mode) {
         (_, InputMode::Insert) => "Esc:normal mode  (typing goes to terminal)",
         (Pane::SessionList, _) => {
-            "j/k:select  Enter/l:terminal  n:new workspace  :::palette  q:quit"
+            "j/k:select  Enter:activate  Space:collapse  n:workspace  t:shell  a:agent  :::palette  q:quit"
         }
         (Pane::Terminal, _) => {
             "i:insert  t:shell  a:agent  [/]:tabs  h:back  j/k:scroll  :::palette"
