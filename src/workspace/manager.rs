@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use anyhow::Result;
 use chrono::Utc;
@@ -20,20 +21,68 @@ pub enum SessionStatus {
     Error,
 }
 
-/// A terminal session within a workspace (shell or agent process).
 pub struct Session {
     pub id: Uuid,
     pub title: String,
     pub is_agent: bool,
     pub pty_writer: Option<Box<dyn Write + Send>>,
     pub output: Arc<Mutex<Vec<u8>>>,
+    pub last_output_at: Arc<Mutex<Instant>>,
+    pub child: Option<Box<dyn portable_pty::Child + Send>>,
     _reader_handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Session {
+    pub fn status(&mut self) -> SessionStatus {
+        if let Some(ref mut child) = self.child {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    if status.success() {
+                        SessionStatus::Done
+                    } else {
+                        SessionStatus::Error
+                    }
+                }
+                Ok(None) => {
+                    // Still alive — check recent output
+                    let last = *self.last_output_at.lock().unwrap();
+                    if last.elapsed().as_secs() < 3 {
+                        SessionStatus::Running
+                    } else {
+                        SessionStatus::Idle
+                    }
+                }
+                Err(_) => SessionStatus::Error,
+            }
+        } else {
+            // No child handle (shouldn't happen, but fallback)
+            SessionStatus::Idle
+        }
+    }
 }
 
 pub struct ManagedWorkspace {
     pub workspace: Workspace,
     pub sessions: Vec<Session>,
     pub active_session: usize,
+    pub collapsed: bool,
+}
+
+/// Entry in the flattened session tree for rendering.
+pub enum SessionTreeEntry {
+    WorkspaceHeader {
+        workspace_id: Uuid,
+        name: String,
+        collapsed: bool,
+        session_count: usize,
+    },
+    SessionItem {
+        workspace_id: Uuid,
+        session_idx: usize,
+        title: String,
+        status: SessionStatus,
+        is_agent: bool,
+    },
 }
 
 pub struct WorkspaceManager {
@@ -64,23 +113,21 @@ impl WorkspaceManager {
             created_at: Utc::now(),
             branch: None,
         };
-
         let managed = ManagedWorkspace {
             workspace,
             sessions: Vec::new(),
             active_session: 0,
+            collapsed: false,
         };
         self.workspaces.push(managed);
         id
     }
 
-    /// Spawn an interactive shell session in the workspace.
     pub fn spawn_shell(&mut self, workspace_id: Uuid) -> Result<usize> {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
         self.spawn_session(workspace_id, "shell".to_string(), &shell, &[], false)
     }
 
-    /// Spawn an agent session (a command that runs non-interactively).
     pub fn spawn_agent(
         &mut self,
         workspace_id: Uuid,
@@ -120,12 +167,14 @@ impl WorkspaceManager {
             cmd.env(k, v);
         }
 
-        let _child = pty_pair.slave.spawn_command(cmd)?;
+        let child = pty_pair.slave.spawn_command(cmd)?;
         let reader = pty_pair.master.try_clone_reader()?;
         let writer = pty_pair.master.take_writer()?;
 
         let output_buf = Arc::new(Mutex::new(Vec::new()));
         let buf_clone = Arc::clone(&output_buf);
+        let last_output = Arc::new(Mutex::new(Instant::now()));
+        let last_output_clone = Arc::clone(&last_output);
         let sender = self.event_sender.clone();
         let ws_id = workspace_id;
 
@@ -136,8 +185,14 @@ impl WorkspaceManager {
                 match reader.read(&mut chunk) {
                     Ok(0) => break,
                     Ok(n) => {
-                        let mut buf = buf_clone.lock().unwrap();
-                        buf.extend_from_slice(&chunk[..n]);
+                        {
+                            let mut buf = buf_clone.lock().unwrap();
+                            buf.extend_from_slice(&chunk[..n]);
+                        }
+                        {
+                            let mut ts = last_output_clone.lock().unwrap();
+                            *ts = Instant::now();
+                        }
                         if let Some(ref tx) = sender {
                             let _ = tx.send(AppEvent::WorkspaceOutput {
                                 workspace_id: ws_id,
@@ -155,6 +210,8 @@ impl WorkspaceManager {
             is_agent,
             pty_writer: Some(writer),
             output: output_buf,
+            last_output_at: last_output,
+            child: Some(child),
             _reader_handle: Some(reader_handle),
         };
 
@@ -164,35 +221,95 @@ impl WorkspaceManager {
         Ok(idx)
     }
 
-    /// Write raw bytes to the active session of a workspace.
-    pub fn write_to_active_session(&mut self, workspace_id: Uuid, data: &[u8]) -> Result<()> {
+    /// Build flattened session tree for rendering in the left pane.
+    pub fn session_tree(&mut self) -> Vec<SessionTreeEntry> {
+        let mut entries = Vec::new();
+        for mw in &mut self.workspaces {
+            entries.push(SessionTreeEntry::WorkspaceHeader {
+                workspace_id: mw.workspace.id,
+                name: mw.workspace.name.clone(),
+                collapsed: mw.collapsed,
+                session_count: mw.sessions.len(),
+            });
+            if !mw.collapsed {
+                for (idx, session) in mw.sessions.iter_mut().enumerate() {
+                    entries.push(SessionTreeEntry::SessionItem {
+                        workspace_id: mw.workspace.id,
+                        session_idx: idx,
+                        title: session.title.clone(),
+                        status: session.status(),
+                        is_agent: session.is_agent,
+                    });
+                }
+            }
+        }
+        entries
+    }
+
+    pub fn toggle_collapse(&mut self, workspace_id: Uuid) {
+        if let Some(mw) = self
+            .workspaces
+            .iter_mut()
+            .find(|mw| mw.workspace.id == workspace_id)
+        {
+            mw.collapsed = !mw.collapsed;
+        }
+    }
+
+    /// Get output for a specific session (by workspace + index).
+    pub fn session_output(&self, workspace_id: Uuid, session_idx: usize) -> Option<Vec<u8>> {
+        let mw = self
+            .workspaces
+            .iter()
+            .find(|mw| mw.workspace.id == workspace_id)?;
+        let session = mw.sessions.get(session_idx)?;
+        let buf = session.output.lock().unwrap();
+        Some(buf.clone())
+    }
+
+    /// Write to a specific session (by workspace + index).
+    pub fn write_to_session(
+        &mut self,
+        workspace_id: Uuid,
+        session_idx: usize,
+        data: &[u8],
+    ) -> Result<()> {
         let mw = self
             .workspaces
             .iter_mut()
             .find(|mw| mw.workspace.id == workspace_id)
             .ok_or_else(|| anyhow::anyhow!("Workspace not found"))?;
-
-        if let Some(session) = mw.sessions.get_mut(mw.active_session) {
-            if let Some(ref mut writer) = session.pty_writer {
-                writer.write_all(data)?;
-                writer.flush()?;
-            }
+        let session = mw
+            .sessions
+            .get_mut(session_idx)
+            .ok_or_else(|| anyhow::anyhow!("Session not found"))?;
+        if let Some(ref mut writer) = session.pty_writer {
+            writer.write_all(data)?;
+            writer.flush()?;
         }
         Ok(())
     }
 
-    /// Get raw terminal output bytes from the active session.
+    /// Get active session output (for backward compat).
     pub fn active_session_output(&self, workspace_id: Uuid) -> Option<Vec<u8>> {
         let mw = self
             .workspaces
             .iter()
             .find(|mw| mw.workspace.id == workspace_id)?;
-        let session = mw.sessions.get(mw.active_session)?;
-        let buf = session.output.lock().unwrap();
-        Some(buf.clone())
+        self.session_output(workspace_id, mw.active_session)
     }
 
-    /// Get session titles for the tab bar.
+    /// Write to active session (for backward compat).
+    pub fn write_to_active_session(&mut self, workspace_id: Uuid, data: &[u8]) -> Result<()> {
+        let idx = self
+            .workspaces
+            .iter()
+            .find(|mw| mw.workspace.id == workspace_id)
+            .map(|mw| mw.active_session)
+            .ok_or_else(|| anyhow::anyhow!("Workspace not found"))?;
+        self.write_to_session(workspace_id, idx, data)
+    }
+
     pub fn session_titles(&self, workspace_id: Uuid) -> Vec<(&str, bool)> {
         self.workspaces
             .iter()
@@ -253,6 +370,16 @@ impl WorkspaceManager {
 
     pub fn has_sessions(&self, workspace_id: Uuid) -> bool {
         self.session_count(workspace_id) > 0
+    }
+
+    /// Resolve a tree index to the workspace it belongs to.
+    pub fn workspace_for_tree_index(&mut self, idx: usize) -> Option<Uuid> {
+        let tree = self.session_tree();
+        match tree.get(idx) {
+            Some(SessionTreeEntry::WorkspaceHeader { workspace_id, .. }) => Some(*workspace_id),
+            Some(SessionTreeEntry::SessionItem { workspace_id, .. }) => Some(*workspace_id),
+            None => None,
+        }
     }
 
     pub fn get(&self, id: Uuid) -> Option<&Workspace> {
