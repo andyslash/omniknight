@@ -4,7 +4,7 @@ assertion_line: 31
 expression: output
 ---
  [NORMAL]  Omniknight  |  —  |  0 workspaces                                                        
-┌ ▸ Workspaces ─────────┐┌ Terminal ───────────────────────────────────────────────────────────────┐
+┌ ▸ Sessions ───────────┐┌ Terminal ───────────────────────────────────────────────────────────────┐
 │                       ││                                                                         │
 │ No workspaces         ││  Select a workspace (Enter) to start                                    │
 │ Press 'n' to create   ││                                                                         │
@@ -22,4 +22,4 @@ expression: output
 │                       ││                                                                         │
 │                       ││                                                                         │
 └───────────────────────┘└─────────────────────────────────────────────────────────────────────────┘
- j/k:select  Enter/l:terminal  n:new workspace  :::palette  q:quit
+ j/k:select  Enter:activate  Space:collapse  n:workspace  t:shell  a:agent  :::palette  q:quit

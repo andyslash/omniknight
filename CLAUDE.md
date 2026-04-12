@@ -1,40 +1,45 @@
 # Omniknight
 
-TUI workspace multiplexer for parallel AI agents. Like Conductor.build / Superset.sh but as a terminal app.
+TUI session multiplexer for AI agents. Like agent-deck / Conductor / Superset but as a Rust terminal app.
 
 ## Concept
-- **Workspace = git worktree + embedded terminal** (interactive PTY shell)
-- User creates workspaces, each gets an isolated terminal
-- User launches whatever CLI they want in the terminal (`claude`, `aider`, `sh`)
-- No separate "agent" concept — an agent is just a process in the terminal
+- **Session** is the primary entity — each session = isolated PTY (shell or agent process)
+- Sessions are grouped by **workspace** (collapsible tree in left pane)
+- **Workspace** = a directory (future: git worktree) with N sessions
+- User launches shells (`t`) or agents (`a`) as sessions
+- Status detection: Running ●, Idle ○, Done ✓, Error ✕
 
 ## Stack
 ratatui 0.30 + crossterm + portable-pty + vt100 + crossbeam-channel
 
-## Layout (2 panes)
+## Layout
 ```
-┌─ Workspaces ──────┐┌─ Terminal (project-a) ───────────────────────┐
-│ ● project-a  ◉    ││ $ claude --task "fix auth"                   │
-│   project-b       ││ Reading src/auth/...                         │
-│                   ││                                              │
-└───────────────────┘└──────────────────────────────────────────────┘
+┌─ Sessions ────────────┐┌─ Active Session ──────────────────────────┐
+│ ▼ project-a     [2]   ││ $ claude --task "fix auth"                │
+│   ● claude       ◉    ││ Reading src/auth/...                      │
+│   ○ shell             ││ Found issue at line 42...                 │
+│ ▶ project-b     [1]   ││                                           │
+└───────────────────────┘└──────────────────────────────────────────┘
 ```
 
 ## Navigation
-- `j/k` — select workspace (left pane) or scroll terminal (right pane)
-- `l` / `Enter` / `Tab` — focus terminal (auto-spawns shell on first use)
-- `h` / `Esc` / `BackTab` — focus workspaces
-- `i` — insert mode (type into terminal PTY)
-- `Esc` — back to normal mode
-- `n` — new workspace dialog
+- `j/k` — select in session tree or scroll terminal
+- `Enter` / `l` — activate session (or spawn shell on empty workspace)
+- `Space` — toggle workspace collapse
+- `h` / `Esc` — back to session list
+- `i` — insert mode (type into PTY)
+- `t` — new shell session in workspace
+- `a` — spawn agent (dialog: command + title)
+- `n` — new workspace (dialog)
+- `[` / `]` — cycle sessions within workspace
 - `:` — command palette
 - `gg/G` — top/bottom, `Ctrl+d/u` — page, `5j` — vim counts
 
 ## Testing
 ```sh
-cargo test --test snapshots           # TestBackend + insta (no TTY)
-cargo test --test e2e -- --ignored    # PTY harness (spawns real binary)
+cargo test --test snapshots           # TestBackend + insta
+cargo test --test e2e -- --ignored    # PTY harness
 ```
 
 ## Terminal rendering
-Uses `vt100` crate to parse ANSI escape sequences from PTY output before rendering in ratatui. Raw bytes → vt100::Parser → clean text lines.
+`vt100` crate parses ANSI from raw PTY bytes → styled ratatui Lines with colors/bold/italic/underline.

@@ -37,7 +37,7 @@ fn snapshot_with_workspace() {
     let id = state
         .workspaces
         .create("my-project".to_string(), "/tmp/test".into());
-    state.active_workspace_id = Some(id);
+    state.active_session = Some((id, 0));
     let output = render_to_string(&state, 100, 20);
     insta::assert_snapshot!("with_workspace", output);
 }

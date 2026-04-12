@@ -8,7 +8,7 @@ use dsl::TuiTest;
 fn test_app_launches() {
     let mut tui = TuiTest::launch();
     tui.assert_contains("Omniknight");
-    tui.assert_contains("Workspaces");
+    tui.assert_contains("Sessions");
     tui.quit();
 }
 
@@ -17,7 +17,6 @@ fn test_app_launches() {
 fn test_create_workspace_and_terminal() {
     let mut tui = TuiTest::launch();
 
-    // Create workspace
     tui.press("n");
     tui.settle(300);
     tui.assert_contains("New Workspace");
@@ -26,28 +25,29 @@ fn test_create_workspace_and_terminal() {
     tui.press("Enter");
     tui.settle(1000);
 
-    // Workspace created, terminal auto-spawned, should see shell prompt
+    // Workspace created with auto-spawned shell, should see session tree
     tui.assert_contains("test-project");
+    tui.assert_contains("shell");
 
     tui.quit();
 }
 
 #[test]
 #[ignore]
-fn test_pane_navigation() {
+fn test_session_list_navigation() {
     let mut tui = TuiTest::launch();
 
-    // Start on Workspaces
-    tui.assert_contains("▸ Workspaces");
+    // Start on SessionList pane
+    tui.assert_contains("▸ Sessions");
 
     // l → Terminal pane
     tui.press("l");
     tui.settle(200);
 
-    // h → back to Workspaces
+    // h → back to SessionList
     tui.press("h");
     tui.settle(200);
-    tui.assert_contains("▸ Workspaces");
+    tui.assert_contains("▸ Sessions");
 
     tui.quit();
 }

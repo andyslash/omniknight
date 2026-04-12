@@ -4,8 +4,8 @@ assertion_line: 42
 expression: output
 ---
  [NORMAL]  Omniknight  |  my-project  |  1 workspaces                                               
-┌ ▸ Workspaces ─────────┐┌ my-project ─────────────────────────────────────────────────────────────┐
-│ ● my-project          ││                                                                         │
+┌ ▸ Sessions ───────────┐┌ my-project ─────────────────────────────────────────────────────────────┐
+│ ▼ my-project [0]      ││                                                                         │
 │                       ││  No sessions — press 't' for shell or 'a' for agent                     │
 │                       ││                                                                         │
 │                       ││                                                                         │
@@ -22,4 +22,4 @@ expression: output
 │                       ││                                                                         │
 │                       ││                                                                         │
 └───────────────────────┘└─────────────────────────────────────────────────────────────────────────┘
- j/k:select  Enter/l:terminal  n:new workspace  :::palette  q:quit
+ j/k:select  Enter:activate  Space:collapse  n:workspace  t:shell  a:agent  :::palette  q:quit
