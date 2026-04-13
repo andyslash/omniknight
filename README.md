@@ -1,6 +1,6 @@
 # Omniknight
 
-Cockpit TUI keyboard-first pour orchestrer des agents IA et des sessions terminal dans des workspaces.
+A keyboard-first TUI cockpit for orchestrating AI agents and terminal sessions within workspaces.
 
 ```
  [NORMAL]  Omniknight  |  dev-project  |  3 workspaces
@@ -18,47 +18,47 @@ Cockpit TUI keyboard-first pour orchestrer des agents IA et des sessions termina
  j/k:select  Enter:activate  n:workspace  t:shell  a:agent  q:quit
 ```
 
-## Fonctionnalites
+## Features
 
-- **Workspaces** — groupes de sessions avec arbre collapsible
-- **Sessions multiples** — shells et agents IA cote a cote, onglets switchables
-- **Terminal PTY** — rendu VT100 complet (couleurs, bold, italic) via `portable-pty` + `vt100`
-- **Vim-style** — navigation `j/k`, mode normal/insert, compteurs (`5j`), leader key (`:`)
-- **Command palette** — recherche fuzzy (nucleo) pour les commandes
-- **Event bus** — architecture decouplée IPC par canaux crossbeam
-- **Config TOML** — tick rate, limites agents, keybinds, theme
+- **Workspaces** — session groups with a collapsible tree view
+- **Multiple sessions** — shells and AI agents side by side, switchable tabs
+- **Terminal PTY** — full VT100 rendering (colors, bold, italic) via `portable-pty` + `vt100`
+- **Vim-style** — `j/k` navigation, normal/insert modes, count prefixes (`5j`), leader key (`:`)
+- **Command palette** — fuzzy search (nucleo) across all commands
+- **Event bus** — decoupled IPC architecture over crossbeam channels
+- **TOML config** — tick rate, agent limits, keybinds, theme
 
 ## Stack
 
 - **Rust** (edition 2024)
-- **ratatui** + **crossterm** pour le rendu TUI
-- **portable-pty** pour les pseudo-terminaux
-- **vt100** pour le parsing ANSI
-- **tokio** pour l'async
-- **nucleo** pour la recherche fuzzy
-- **insta** pour les snapshot tests
+- **ratatui** + **crossterm** for TUI rendering
+- **portable-pty** for pseudo-terminals
+- **vt100** for ANSI parsing
+- **tokio** for async runtime
+- **nucleo** for fuzzy matching
+- **insta** for snapshot testing
 
-## Lancer
+## Getting started
 
 ```bash
 cargo run
 ```
 
-## Raccourcis
+## Keybindings
 
-| Mode   | Touche       | Action                     |
+| Mode   | Key          | Action                     |
 |--------|-------------|----------------------------|
-| Normal | `j` / `k`  | Naviguer haut/bas          |
-| Normal | `Enter`     | Activer workspace/session  |
+| Normal | `j` / `k`  | Navigate up/down           |
+| Normal | `Enter`     | Activate workspace/session |
 | Normal | `Space`     | Collapse/expand workspace  |
-| Normal | `n`         | Nouveau workspace          |
-| Normal | `t`         | Nouvelle session shell     |
-| Normal | `a`         | Nouvelle session agent     |
-| Normal | `i`         | Mode insert (terminal)     |
-| Normal | `[` / `]`   | Changer d'onglet           |
+| Normal | `n`         | New workspace              |
+| Normal | `t`         | New shell session          |
+| Normal | `a`         | New agent session          |
+| Normal | `i`         | Enter insert mode          |
+| Normal | `[` / `]`   | Switch tabs                |
 | Normal | `:`         | Command palette            |
-| Normal | `q`         | Quitter                    |
-| Insert | `Esc`       | Retour mode normal         |
+| Normal | `q`         | Quit                       |
+| Insert | `Esc`       | Back to normal mode        |
 
 ## Configuration
 
@@ -76,6 +76,6 @@ shell = "/bin/zsh"
 leader = ":"
 ```
 
-## Licence
+## License
 
 MIT
