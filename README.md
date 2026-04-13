@@ -76,6 +76,31 @@ shell = "/bin/zsh"
 leader = ":"
 ```
 
+## Contributing
+
+Contributions are welcome! Here's how to get started:
+
+1. **Fork** the repository
+2. **Create a branch** for your feature or fix (`git checkout -b feat/my-feature`)
+3. **Make your changes** — keep commits small and focused
+4. **Run tests** before submitting: `cargo test`
+5. **Open a pull request** with a clear description of what changed and why
+
+### Guidelines
+
+- Follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `refactor:`, etc.)
+- Keep PRs focused — one feature or fix per PR
+- Add tests for new functionality when possible
+- Run `cargo clippy` and fix warnings before submitting
+
+### Ideas for contribution
+
+- Multi-pane terminal splits
+- Agent protocol integrations (MCP, A2A)
+- Session persistence / restore
+- Custom themes
+- Plugin system for custom commands
+
 ## License
 
-MIT
+This project is licensed under the [MIT License](LICENSE).
